@@ -1,23 +1,23 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
 st.set_page_config(page_title="BI Vendas Asfalto", page_icon="📊", layout="wide")
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("dados_processados.csv")
+    df = pd.read_csv("dados_processados.csv")
+    # Remover nulos e garantir tipos
+    df = df.dropna(subset=['Regiao', 'UF', 'Ano'])
+    df['Regiao'] = df['Regiao'].astype(str).str.strip()
+    df['UF'] = df['UF'].astype(str).str.strip()
+    df['Ano'] = pd.to_numeric(df['Ano'], errors='coerce').astype('Int64')
+    df = df.dropna(subset=['Ano'])
+    return df
 
 df = load_data()
 
-# CSS
-st.markdown("""<style>
-.main-header {font-size: 2.5rem; font-weight: bold; color: #1f77b4; text-align: center;}
-</style>""", unsafe_allow_html=True)
-
-# Header
-st.markdown('<h1 class="main-header">📊 Dashboard BI - Vendas de Asfalto</h1>', unsafe_allow_html=True)
+st.markdown('<h1 style="text-align:center;color:#1f77b4;">📊 Dashboard BI - Vendas de Asfalto</h1>', unsafe_allow_html=True)
 st.markdown("**Fonte:** ANP | **Período:** 1992-2024")
 st.markdown("---")
 
@@ -26,18 +26,22 @@ st.sidebar.title("🎛️ Filtros")
 anos = st.sidebar.slider("📅 Período:", int(df['Ano'].min()), int(df['Ano'].max()), 
                          (int(df['Ano'].min()), int(df['Ano'].max())))
 
-regioes_disp = ['Todas'] + sorted(df['Regiao'].unique().tolist())
+# Filtrar valores e remover NaN antes de criar lista
+regioes_unicas = df['Regiao'].dropna().unique()
+regioes_unicas = [r for r in regioes_unicas if isinstance(r, str) and r.strip() != '']
+regioes_disp = ['Todas'] + sorted(regioes_unicas)
 regioes = st.sidebar.multiselect("🗺️ Região:", regioes_disp, default=['Todas'])
 
 if 'Todas' not in regioes and len(regioes) > 0:
-    ufs_disp = sorted(df[df['Regiao'].isin(regioes)]['UF'].unique().tolist())
+    ufs_unicas = df[df['Regiao'].isin(regioes)]['UF'].dropna().unique()
 else:
-    ufs_disp = sorted(df['UF'].unique().tolist())
+    ufs_unicas = df['UF'].dropna().unique()
 
-ufs_disp = ['Todas'] + ufs_disp
+ufs_unicas = [u for u in ufs_unicas if isinstance(u, str) and u.strip() != '']
+ufs_disp = ['Todas'] + sorted(ufs_unicas)
 ufs = st.sidebar.multiselect("🏛️ UF:", ufs_disp, default=['Todas'])
 
-# Filtrar
+# Filtrar dados
 df_f = df[(df['Ano'] >= anos[0]) & (df['Ano'] <= anos[1])]
 if 'Todas' not in regioes and len(regioes) > 0:
     df_f = df_f[df_f['Regiao'].isin(regioes)]
@@ -78,6 +82,7 @@ with tab1:
         st.subheader("🏆 Top 10 UFs")
         top = df_f.groupby('UF')['VendasTon'].sum().nlargest(10).reset_index()
         fig = px.bar(top, x='VendasTon', y='UF', orientation='h', color='VendasTon')
+        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
     
     with col4:
@@ -88,14 +93,7 @@ with tab1:
 
 with tab2:
     st.header("🗺️ Análise Geográfica")
-    
-    st.subheader("🌎 Mapa do Brasil")
-    mapa = df_f.groupby('UF')['VendasTon'].sum().reset_index()
-    fig = px.choropleth(mapa, locations='UF', locationmode='USA-states',
-                        color='VendasTon', scope='south america',
-                        color_continuous_scale='YlOrRd')
-    fig.update_geos(fitbounds="locations", visible=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("🌎 Distribuição por UF")
     
     col1, col2 = st.columns(2)
     
@@ -103,7 +101,8 @@ with tab2:
         st.subheader("📊 Ranking UFs")
         rank = df_f.groupby(['UF', 'Regiao']).agg({'VendasTon': 'sum', 'CodigoIBGE': 'nunique'}).reset_index()
         rank.columns = ['UF', 'Região', 'Vendas (ton)', 'Municípios']
-        st.dataframe(rank.sort_values('Vendas (ton)', ascending=False).head(15), use_container_width=True, hide_index=True)
+        rank = rank.sort_values('Vendas (ton)', ascending=False).head(15)
+        st.dataframe(rank, use_container_width=True, hide_index=True)
     
     with col2:
         st.subheader("🏆 Top 20 Municípios")
@@ -134,6 +133,7 @@ with tab3:
         cresc = cresc.dropna()
         fig = px.bar(cresc, x='Ano', y='Crescimento_%', color='Crescimento_%',
                      color_continuous_scale=['red','yellow','green'], color_continuous_midpoint=0)
+        fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
@@ -146,7 +146,7 @@ with tab4:
     
     total_m = df['CodigoIBGE'].nunique()
     incons = df[df['TemInconsistencia']=='Sim']['CodigoIBGE'].nunique()
-    taxa = (incons/total_m)*100
+    taxa = (incons/total_m)*100 if total_m > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("🏘️ Total Municípios", f"{total_m:,}")
@@ -172,7 +172,8 @@ with tab4:
             incons_uf = df[df['TemInconsistencia']=='Sim'].groupby('UF')['CodigoIBGE'].nunique().reset_index()
             incons_uf.columns = ['UF', 'Quantidade']
             incons_uf = incons_uf.sort_values('Quantidade', ascending=False).head(10)
-            fig = px.bar(incons_uf, x='UF', y='Quantidade', color='Quantidade', color_continuous_scale='Reds')
+            fig = px.bar(incons_uf, x='UF', y='Quantidade', color='Quantidade', 
+                        color_continuous_scale='Reds')
             st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("---")
@@ -189,26 +190,12 @@ with tab4:
     3. Em caso de empate: ordem alfabética
     
     **Como funciona:**
-    - Todos os gráficos usam o campo `MunicipioOficial`
-    - O `CodigoIBGE` é a chave primária única
-    - Garante consistência em todas as agregações
-    - Elimina duplicidade em relatórios
-    """)
-    
-    st.info("""
-    **💡 Exemplo Prático:**
-    
-    ❌ **SEM Dimensão Mestre:**
-```python
-    df.groupby('Municipio')['VendasTon'].sum()  # Pode duplicar!
-```
-    
-    ✅ **COM Dimensão Mestre:**
-```python
-    df.groupby('MunicipioOficial')['VendasTon'].sum()  # Sem duplicidade!
-```
+    - ✅ Todos os gráficos usam o campo `MunicipioOficial`
+    - ✅ O `CodigoIBGE` é a chave primária única
+    - ✅ Garante consistência em todas as agregações
+    - ✅ Elimina duplicidade em relatórios
     """)
 
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#666;'>Dashboard desenvolvido com Streamlit | Fonte: ANP</p>", 
+st.markdown("<p style='text-align:center;color:#666;'>Dashboard BI - Vendas de Asfalto | ANP</p>", 
             unsafe_allow_html=True)
